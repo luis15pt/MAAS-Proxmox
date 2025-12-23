@@ -1,0 +1,92 @@
+#!/bin/bash -e
+#
+# fuse-nbd - Mount Packer image for customization
+#
+# Author: Alexsander Silva de Souza <alexsander.souza@canonical.com>
+#
+# Copyright (C) 2023 Canonical
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+set -ex
+
+PACKER_OUTPUT=output-${SOURCE:-qemu}/packer-${SOURCE:-qemu}
+IMG_FMT=${IMG_FMT:-qcow2}
+
+if [ ! -f "${PACKER_OUTPUT}" ]; then
+    echo "ERROR: Not in the same path as template!" >&2
+    exit
+fi
+
+sync -f "${PACKER_OUTPUT}"
+
+TMP_DIR=$(mktemp -d /tmp/packer-maas-XXXX)
+cleanup() {
+    for dev in "${TMP_DIR}"/p*/ "${TMP_DIR}"/disk/ "${TMP_DIR}"/boot/; do
+        dev=${dev%*/}
+        if [ -d "${dev}" ]; then
+            fusermount -u -z "${dev}"
+            grep -qs "${dev} " /proc/mounts && umount -f "${dev}"
+        fi
+    done
+    rm -rf "${TMP_DIR}"
+}
+trap cleanup EXIT
+
+function mount_disk() {
+    DEV=$1
+    mkdir -p "${DEV}"
+    nbdfuse "${DEV}" \
+        --command nbdkit -s nbd \
+        socket="${TMP_DIR}"/qemu-img.sock &
+    retries=0
+    until [ -f "${DEV}/nbd" ]; do
+        sleep 1
+        if ((++retries > 10)); then
+            return 1
+        fi
+    done
+}
+
+function mount_part() {
+    PART=$1
+    MOUNTPOINT=$2
+    FUSEDRV=${3:-fuse2fs}
+    DEV=${TMP_DIR}/p${PART}
+    mkdir -p "${MOUNTPOINT}"
+    mkdir -p "${DEV}"
+    nbdfuse "${DEV}" \
+        --command nbdkit -s nbd \
+        socket="${TMP_DIR}"/qemu-img.sock \
+        --filter=partition partition="${PART}" &
+    retries=0
+    until [ -f "${DEV}/nbd" ]; do
+        sleep 1
+        if ((++retries > 10)); then
+            return 1
+        fi
+    done
+    case "${FUSEDRV}" in
+    "fusefat") fusefat "${DEV}"/nbd "${MOUNTPOINT}" -o rw+ -s ;;
+    "fuse2fs") fuse2fs "${DEV}"/nbd "${MOUNTPOINT}" -o fakeroot ;;
+    *) echo "Unsupported Fuse driver" && exit 1 ;;
+    esac
+}
+
+qemu-nbd --socket="${TMP_DIR}"/qemu-img.sock \
+    --format="${IMG_FMT}" \
+    --shared=10 \
+    "${PACKER_OUTPUT}" &
+sleep 5
+
+mkdir -p "${TMP_DIR}/root"
