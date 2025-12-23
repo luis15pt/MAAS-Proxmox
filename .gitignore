@@ -1,0 +1,19 @@
+# Build artifacts
+*.tar.gz
+*.qcow2
+*.iso
+output-*/
+packer_cache/
+seeds-*.iso
+*.log
+
+# Packer crash logs
+crash.log
+
+# Temporary files
+*.tmp
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
