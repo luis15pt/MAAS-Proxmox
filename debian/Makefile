@@ -84,8 +84,20 @@ debian: check-deps clean OVMF_CODE.fd OVMF_VARS.fd SIZE_CODE.fd SIZE_VARS.fd
 		-var host_is_arm=${HOST_IS_ARM} \
 		-var timeout=${TIMEOUT} .
 
+proxmox: check-deps clean OVMF_CODE.fd OVMF_VARS.fd SIZE_CODE.fd SIZE_VARS.fd
+	${PACKER} init . && ${PACKER} build \
+		-var debian_series=${SERIES} \
+		-var debian_version=${VERSION} \
+		-var architecture=${ARCH} \
+		-var ovmf_suffix=${OVMF_SFX} \
+		-var boot_mode=${BOOT} \
+		-var host_is_arm=${HOST_IS_ARM} \
+		-var timeout=${TIMEOUT} \
+		-var install_proxmox=true \
+		-var filename=proxmox-ve-${VERSION}-cloudimg.tar.gz .
+
 clean:
-	${RM} -rf output-* debian-custom-*.gz \
+	${RM} -rf output-* debian-custom-*.gz debian-*-cloudimg.tar.gz proxmox-*.tar.gz \
 		seeds-cloudimg.iso \
 		OVMF_VARS.fd \
 		OVMF_CODE.fd

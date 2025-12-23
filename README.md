@@ -4,12 +4,12 @@ Build custom Debian images for MAAS deployment, with the goal of deploying Proxm
 
 ## Current Status
 
-This repository currently contains the configuration to build **vanilla Debian 13 (Trixie)** images for MAAS deployment. Future branches will add Proxmox VE installation on top of Debian.
+This repository contains configurations to build both vanilla Debian 13 (Trixie) and Proxmox VE 9.1 images for MAAS deployment.
 
 ## Branches
 
 - **main**: Vanilla Debian 13 (Trixie) - UEFI boot only
-- **proxmox** (planned): Debian 13 with Proxmox VE 9.1 pre-installed
+- **proxmox**: Debian 13 with Proxmox VE 9.1 pre-installed
 
 ## Prerequisites
 
@@ -96,6 +96,60 @@ sudo systemctl restart snap.maas.supervisor
 
 **Default Credentials**: SSH with your MAAS-configured key as user `debian`.
 
+## Building Proxmox VE Images (proxmox branch)
+
+To build a Debian 13 image with Proxmox VE 9.1 pre-installed:
+
+```bash
+# Switch to proxmox branch
+git checkout proxmox
+
+# Build Proxmox image
+cd debian
+sg kvm -c "make proxmox SERIES=trixie"
+```
+
+This will create `proxmox-ve-13-cloudimg.tar.gz` (approximately 2.5GB).
+
+**Build time**: ~25-35 minutes (longer than vanilla due to Proxmox installation).
+
+### What Gets Installed
+
+The Proxmox build includes:
+- Proxmox VE 9.1 (latest packages from pve-no-subscription repository)
+- Proxmox kernel (replaces standard Debian kernel)
+- Required services: postfix, open-iscsi, chrony
+- Web interface accessible at `https://<machine-ip>:8006`
+
+### Upload Proxmox Image to MAAS
+
+```bash
+# Copy tarball to MAAS server
+scp proxmox-ve-13-cloudimg.tar.gz ubuntu@<MAAS_IP>:/home/ubuntu/proxmox-ve-9.1.tar.gz
+
+# SSH to MAAS server and upload the image
+ssh ubuntu@<MAAS_IP>
+
+maas admin boot-resources create \
+  name='custom/proxmox-ve-9.1' \
+  title='Proxmox VE 9.1 (Debian 13)' \
+  architecture='amd64/generic' \
+  filetype='tgz' \
+  content@=/home/ubuntu/proxmox-ve-9.1.tar.gz
+```
+
+### Post-Deployment
+
+After deploying a Proxmox image:
+
+1. Access web interface: `https://<machine-ip>:8006`
+2. Login as `root` with the password configured via MAAS
+3. Create network bridge `vmbr0` for VM networking
+4. Configure storage pools as needed
+5. Upload or add a subscription key (or continue with no-subscription repository)
+
+**Note**: The pve-no-subscription repository is used by default. For production use, consider purchasing a Proxmox subscription and updating the repository configuration.
+
 ## Build Options
 
 ### Default Build (Debian 13 with default kernel)
@@ -140,6 +194,7 @@ MAAS-Proxmox/
     │   ├── essential-packages.sh      # Install base packages
     │   ├── setup-boot.sh              # Configure bootloader
     │   ├── networking.sh              # Network configuration
+    │   ├── install-proxmox.sh         # Install Proxmox VE (proxmox branch)
     │   ├── install-custom-kernel.sh   # Optional kernel install
     │   ├── setup-curtin.sh            # MAAS integration
     │   └── cleanup.sh                 # Image cleanup

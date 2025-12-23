@@ -45,3 +45,9 @@ variable "ovmf_suffix" {
   default     = ""
   description = "Suffix for OVMF CODE and VARS files. Newer systems such as Noble use _4M."
 }
+
+variable "install_proxmox" {
+  type        = bool
+  default     = false
+  description = "Install Proxmox VE on the image"
+}
