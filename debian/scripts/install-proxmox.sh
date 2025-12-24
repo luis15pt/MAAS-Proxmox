@@ -46,7 +46,7 @@ wget https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg \
 
 # Verify the keyring (expected hash for Trixie keyring)
 echo "Verifying keyring..."
-echo "b4e8c6238b8ff42c2fa84c1611b396d7f42d2e1f  /usr/share/keyrings/proxmox-archive-keyring.gpg" | sha1sum -c -
+echo "08a2dc8925cd7120582ffb2f93f468744743361f  /usr/share/keyrings/proxmox-archive-keyring.gpg" | sha1sum -c -
 
 # Update package lists
 echo "Updating package lists..."
