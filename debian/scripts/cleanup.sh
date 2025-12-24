@@ -17,11 +17,6 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-export DEBIAN_FRONTEND=noninteractive
-
-# Reset cloud-init so it runs fresh on MAAS deployment
-echo "Cleaning cloud-init state..."
-cloud-init clean --logs --machine-id --seed
 
 # Everything in /run/packer_backup should be restored.
 find /run/packer_backup
@@ -33,16 +28,6 @@ sed -i s/^root:[^:]*/root:*/ /etc/shadow
 rm -r /root/.ssh
 rm -r /etc/ssh/ssh_host_*
 
-# Clean apt cache and logs
-apt-get autoremove --purge -yq || true
-apt-get clean -yq
-
-# Remove machine-id so a new one is generated on deployment
-truncate -s 0 /etc/machine-id
-rm -f /var/lib/dbus/machine-id
-
-# Clean temporary files and logs
-rm -rf /tmp/* /var/tmp/*
-find /var/log -type f -exec truncate -s 0 {} \;
-
-echo "Cleanup complete."
+# Remove /etc/hostname so MAAS can set it during deployment
+# Proxmox installation creates this file, but it must not exist in the image
+rm -f /etc/hostname
