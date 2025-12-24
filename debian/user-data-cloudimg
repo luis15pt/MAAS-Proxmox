@@ -6,7 +6,6 @@ users:
     ssh_redirect_user: false
 ssh_pwauth: True
 disable_root: false
-preserve_hostname: true
 runcmd:
   - sed -i -e '/^[#]*PermitRootLogin/s/^.*$/PermitRootLogin yes/' /etc/ssh/sshd_config
   - systemctl restart ssh
