@@ -1,6 +1,10 @@
 #!/bin/bash -ex
 #
-# install-proxmox.sh - Install Proxmox VE 9.1 on Debian 13 Trixie
+# install-proxmox.sh - Prepare system for Proxmox VE 9.1 installation
+#
+# This script ONLY configures the Proxmox repository.
+# Actual Proxmox VE installation happens POST-deployment via MAAS
+# when hostname and network are properly configured.
 #
 # Based on: https://pve.proxmox.com/wiki/Install_Proxmox_VE_on_Debian_13_Trixie
 #
@@ -13,21 +17,13 @@
 
 # Only run if INSTALL_PROXMOX is set to "true"
 if [ "${INSTALL_PROXMOX}" != "true" ]; then
-    echo "Skipping Proxmox installation (INSTALL_PROXMOX != true)"
+    echo "Skipping Proxmox repository setup (INSTALL_PROXMOX != true)"
     exit 0
 fi
 
 export DEBIAN_FRONTEND=noninteractive
 
-packer_apt_proxy_config="/etc/apt/apt.conf.d/packer-proxy.conf"
-if [ ! -z "${APT_PROXY:-}" ]; then
-    echo "Acquire::http::Proxy \"${APT_PROXY}\";" > $packer_apt_proxy_config
-fi
-if [ ! -z "${APT_PROXY_HTTPS:-}" ]; then
-    echo "Acquire::https::Proxy \"${APT_PROXY_HTTPS}\";" >> $packer_apt_proxy_config
-fi
-
-echo "Installing Proxmox VE 9.1 on Debian Trixie..."
+echo "Configuring Proxmox VE repository for post-deployment installation..."
 
 # Add Proxmox VE repository in deb822 format
 echo "Adding Proxmox VE repository..."
@@ -48,43 +44,10 @@ wget https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg \
 echo "Verifying keyring..."
 echo "08a2dc8925cd7120582ffb2f93f468744743361f  /usr/share/keyrings/proxmox-archive-keyring.gpg" | sha1sum -c -
 
-# Update package lists
+# Update package lists to include Proxmox packages
 echo "Updating package lists..."
 apt-get update
 
-# Full system upgrade
-echo "Performing full system upgrade..."
-apt-get -y full-upgrade
-
-# Install Proxmox kernel first
-echo "Installing Proxmox kernel..."
-apt-get install -y proxmox-default-kernel
-
-# Install Proxmox VE and required packages
-echo "Installing Proxmox VE..."
-# Preconfigure postfix to avoid interactive prompts
-echo "postfix postfix/main_mailer_type select No configuration" | debconf-set-selections
-echo "postfix postfix/mailname string localhost" | debconf-set-selections
-
-apt-get install -y \
-    proxmox-ve \
-    postfix \
-    open-iscsi \
-    chrony
-
-# Remove standard Debian kernel in favor of Proxmox kernel
-echo "Removing standard Debian kernel..."
-apt-get remove -y linux-image-amd64 'linux-image-6.12*' || true
-
-# Remove os-prober (not needed for hypervisor)
-echo "Removing os-prober..."
-apt-get remove -y os-prober || true
-
-# Clean up
-echo "Cleaning up..."
-apt-get autoremove -y
-apt-get clean
-
-echo "Proxmox VE installation complete!"
-echo "Installed packages:"
-dpkg -l | grep -E "pve-|proxmox-"
+echo "Proxmox repository configured successfully!"
+echo "Proxmox VE can now be installed post-deployment with:"
+echo "  apt-get install -y proxmox-ve postfix open-iscsi chrony"
