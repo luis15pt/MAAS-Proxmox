@@ -130,11 +130,9 @@
               # Ensure localhost entries exist
               grep -q "^127.0.0.1 localhost" /etc/hosts || echo "127.0.0.1 localhost" >> /etc/hosts
 
-              # Restart pve-cluster to pick up new hostname resolution
-              echo "Restarting pve-cluster service..."
-              systemctl restart pve-cluster 2>/dev/null || true
-
               echo "/etc/hosts fix complete"
+              # Note: No need to restart pve-cluster - it will start automatically
+              # after this service completes (via Before= and RequiredBy= directives)
           else
               echo "Error: Could not determine IP=${IP}, FQDN=${FQDN}, or HOSTNAME=${HOSTNAME}"
               exit 1
