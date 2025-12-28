@@ -147,8 +147,9 @@
         content: |
           [Unit]
           Description=Fix Proxmox /etc/hosts for non-loopback IP
-          After=network-online.target cloud-final.service
-          Wants=network-online.target
+          After=cloud-final.service
+          Before=pve-cluster.service pveproxy.service pvedaemon.service pvestatd.service
+          DefaultDependencies=no
 
           [Service]
           Type=oneshot
@@ -156,7 +157,7 @@
           RemainAfterExit=yes
 
           [Install]
-          WantedBy=multi-user.target
+          RequiredBy=pve-cluster.service
 
     - name: Enable fix-proxmox-hosts service
       systemd:
