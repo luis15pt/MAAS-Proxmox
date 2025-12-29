@@ -85,80 +85,48 @@
       ignore_errors: yes
 
     # Cloud-init configuration for Proxmox compatibility
-    # Override MAAS's manage_etc_hosts: true setting
+    # Three-pronged approach to fix /etc/hosts:
+    # 1. Disable cloud-init's manage_etc_hosts
+    # 2. Modify the hosts template to remove 127.0.1.1 line
+    # 3. Use bootcmd to dynamically add correct IP mapping
+
     - name: Override MAAS manage_etc_hosts for Proxmox compatibility
       copy:
         dest: /etc/cloud/cloud.cfg.d/99-proxmox.cfg
         content: |
-          # Override MAAS manage_etc_hosts setting for Proxmox compatibility
+          # Disable cloud-init hosts management for Proxmox compatibility
           # Proxmox requires hostname to resolve to actual IP, not 127.0.1.1
-          # MAAS sets manage_etc_hosts: true in 90_dpkg_local_cloud_config.cfg
-          # This file (99) loads after and overrides that setting
           manage_etc_hosts: false
         mode: '0644'
 
-    # Systemd service to fix /etc/hosts after cloud-init
-    - name: Create script to fix /etc/hosts for Proxmox
+    - name: Modify cloud-init hosts template to remove 127.0.1.1 line
       copy:
-        dest: /usr/local/bin/fix-proxmox-hosts.sh
-        mode: '0755'
+        dest: /etc/cloud/templates/hosts.debian.tmpl
         content: |
-          #!/bin/bash
-          # Fix /etc/hosts for Proxmox after MAAS deployment
-          # Proxmox requires hostname to resolve to actual IP, not 127.0.1.1
+          ## template:jinja
+          127.0.0.1 localhost
 
-          # Wait for network to be fully up
-          sleep 5
-
-          HOSTNAME=$(hostname -s)
-          FQDN=$(hostname -f)
-          # Get first non-loopback IPv4 address
-          IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '^127\.' | head -1)
-
-          if [ -n "$IP" ] && [ -n "$FQDN" ] && [ -n "$HOSTNAME" ]; then
-              echo "Fixing /etc/hosts: ${IP} ${FQDN} ${HOSTNAME}"
-
-              # Backup original
-              cp /etc/hosts /etc/hosts.backup
-
-              # Remove any existing entries for this hostname
-              sed -i "/\s${HOSTNAME}\(\s\|$\)/d" /etc/hosts
-
-              # Add correct entry at the top (after comments)
-              sed -i "1a ${IP} ${FQDN} ${HOSTNAME}" /etc/hosts
-
-              # Ensure localhost entries exist
-              grep -q "^127.0.0.1 localhost" /etc/hosts || echo "127.0.0.1 localhost" >> /etc/hosts
-
-              echo "/etc/hosts fix complete"
-              # Note: No need to restart pve-cluster - it will start automatically
-              # after this service completes (via Before= and RequiredBy= directives)
-          else
-              echo "Error: Could not determine IP=${IP}, FQDN=${FQDN}, or HOSTNAME=${HOSTNAME}"
-              exit 1
-          fi
-
-    - name: Create systemd service for /etc/hosts fix
-      copy:
-        dest: /etc/systemd/system/fix-proxmox-hosts.service
+          # The following lines are desirable for IPv6 capable hosts
+          ::1 ip6-localhost ip6-loopback
+          fe00::0 ip6-localnet
+          ff00::0 ip6-mcastprefix
+          ff02::1 ip6-allnodes
+          ff02::2 ip6-allrouters
         mode: '0644'
+
+    - name: Add cloud-init bootcmd to fix /etc/hosts with actual IP
+      copy:
+        dest: /etc/cloud/cloud.cfg.d/98-proxmox-hosts.cfg
         content: |
-          [Unit]
-          Description=Fix Proxmox /etc/hosts for non-loopback IP
-          After=cloud-final.service
-          Before=pve-cluster.service pveproxy.service pvedaemon.service pvestatd.service
-          DefaultDependencies=no
-
-          [Service]
-          Type=oneshot
-          ExecStart=/usr/local/bin/fix-proxmox-hosts.sh
-          RemainAfterExit=yes
-
-          [Install]
-          RequiredBy=pve-cluster.service
-
-    - name: Enable fix-proxmox-hosts service
-      systemd:
-        name: fix-proxmox-hosts.service
-        enabled: yes
-        daemon_reload: yes
+          # Proxmox requires hostname to resolve to non-loopback IP
+          # This bootcmd runs early in boot to add the correct IP mapping
+          bootcmd:
+            - |
+              IP=$(ip -4 addr show | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d/ -f1)
+              HOSTNAME=$(hostname -s)
+              FQDN=$(hostname -f 2>/dev/null || echo "${HOSTNAME}.localdomain")
+              if [ -n "$IP" ] && [ -n "$HOSTNAME" ]; then
+                sed -i '/^127\.0\.1\.1/d' /etc/hosts
+                grep -q "^${IP}" /etc/hosts || echo "${IP} ${FQDN} ${HOSTNAME}" >> /etc/hosts
+              fi
+        mode: '0644'
