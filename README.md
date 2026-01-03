@@ -22,6 +22,39 @@ Based on Debian 13 (Trixie) with cloud-init integration for seamless MAAS provis
 
 ## Quick Start
 
+### Option A: Build with Docker (Recommended)
+
+The easiest way to build the image is using Docker, which handles all dependencies automatically.
+
+**Prerequisites:**
+- Docker and Docker Compose installed
+- KVM support on the host machine
+
+```bash
+# Clone the repository
+git clone https://github.com/luis15pt/MAAS-Proxmox.git
+cd MAAS-Proxmox
+
+# Set KVM group ID for your system
+export KVM_GID=$(getent group kvm | cut -d: -f3)
+
+# Build the image using Docker
+sudo -E docker compose up
+
+# Or run in background and monitor logs
+sudo -E docker compose up -d
+sudo docker compose logs -f
+```
+
+**Note:** The `-E` flag preserves the `KVM_GID` environment variable when using sudo.
+
+**Output**: `debian/proxmox-ve-13-cloudimg.tar.gz` (~2.4GB)
+**Build time**: ~35-45 minutes
+
+The container will automatically clean up after the build completes. The output file will be in the `debian/` directory.
+
+### Option B: Manual Build (Native)
+
 ### 1. Install Dependencies
 
 ```bash
@@ -110,8 +143,12 @@ This allows VMs to use the vmbr0 bridge for networking.
 ```
 MAAS-Proxmox/
 ├── README.md
+├── Dockerfile                             # Docker build environment
+├── docker-compose.yml                     # Docker orchestration
+├── docker-entrypoint.sh                   # Docker build script
+├── .dockerignore                          # Docker build exclusions
 └── debian/
-    ├── Makefile                            # Build automation
+    ├── Makefile                            # Build automation (manual builds)
     ├── debian-cloudimg.pkr.hcl            # Main Packer configuration
     ├── debian-cloudimg.variables.pkr.hcl  # Packer variables
     ├── variables.pkr.hcl                  # Additional variables
@@ -172,10 +209,31 @@ Then switch to root: `sudo -i`
 
 ### Build fails with "permission denied" on /dev/kvm
 
-Add user to kvm group:
+**For Docker builds:**
+```bash
+# Ensure KVM_GID is set correctly
+export KVM_GID=$(getent group kvm | cut -d: -f3)
+sudo -E docker compose up
+
+# Verify KVM device is accessible
+ls -l /dev/kvm
+```
+
+**For manual builds:**
 ```bash
 sudo usermod -a -G kvm $USER
 newgrp kvm
+```
+
+### Docker build fails with FUSE errors
+
+Ensure `/dev/fuse` device is available:
+```bash
+ls -l /dev/fuse
+# Should show: crw-rw-rw- 1 root root 10, 229
+
+# If missing, load the fuse module
+sudo modprobe fuse
 ```
 
 ### Image boots to EFI shell

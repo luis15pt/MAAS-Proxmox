@@ -1,0 +1,18 @@
+# Build artifacts
+debian/output-*
+debian/*.tar.gz
+debian/*.gz
+debian/*.iso
+debian/OVMF_*.fd
+debian/*.log
+
+# Git
+.git
+.gitignore
+
+# Screenshots and documentation
+*.png
+*.jpg
+
+# Cache
+.cache

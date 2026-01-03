@@ -136,6 +136,36 @@
         enabled: no
         masked: yes
 
+    # CRITICAL: Disable systemd-resolved to match standard Proxmox behavior
+    # Debian 13 cloud images include systemd-resolved which creates /etc/resolv.conf
+    # as a symlink to 127.0.0.53. This prevents ifupdown2 from managing DNS properly.
+    # Standard Proxmox installations do NOT use systemd-resolved.
+    - name: Stop systemd-resolved service
+      systemd:
+        name: systemd-resolved
+        state: stopped
+      ignore_errors: yes
+
+    - name: Disable and mask systemd-resolved service
+      systemd:
+        name: systemd-resolved
+        enabled: no
+        masked: yes
+
+    - name: Remove systemd-resolved stub resolv.conf symlink
+      file:
+        path: /etc/resolv.conf
+        state: absent
+      ignore_errors: yes
+
+    - name: Create placeholder resolv.conf file
+      copy:
+        dest: /etc/resolv.conf
+        content: |
+          # DNS will be configured during MAAS deployment
+          # After deployment, can be changed via Proxmox web UI: Node → System → DNS
+        mode: '0644'
+
     - name: Ensure networking service is enabled (ifupdown2)
       systemd:
         name: networking

@@ -96,11 +96,11 @@ def configure_proxmox_network(config, target):
             interfaces_content.append(f"    address {ip_address}\n")
             if gateway:
                 interfaces_content.append(f"    gateway {gateway}\n")
-            if dns_servers:
-                interfaces_content.append(f"    dns-nameservers {' '.join(dns_servers)}\n")
             interfaces_content.append(f"    bridge-ports {iface_name}\n")
             interfaces_content.append("    bridge-stp off\n")
             interfaces_content.append("    bridge-fd 0\n")
+            interfaces_content.append("\n")
+            interfaces_content.append("source /etc/network/interfaces.d/*\n")
 
             with open(interfaces_path, 'w') as f:
                 f.writelines(interfaces_content)
@@ -109,6 +109,21 @@ def configure_proxmox_network(config, target):
             print("-" * 80)
             print(''.join(interfaces_content))
             print("-" * 80)
+
+            # Write DNS servers directly to /etc/resolv.conf
+            # Proxmox web UI manages /etc/resolv.conf directly, not via dns-nameservers in /etc/network/interfaces
+            if dns_servers:
+                resolv_conf_path = os.path.join(target, "etc/resolv.conf")
+                resolv_content = []
+                resolv_content.append("# DNS servers from MAAS deployment\n")
+                resolv_content.append("# Can be changed via Proxmox web UI: Node → System → DNS\n")
+                for dns_server in dns_servers:
+                    resolv_content.append(f"nameserver {dns_server}\n")
+
+                with open(resolv_conf_path, 'w') as f:
+                    f.writelines(resolv_content)
+
+                print(f"DEBUG: Created {resolv_conf_path} with DNS servers: {', '.join(dns_servers)}")
 
             # CRITICAL: Delete /etc/network/interfaces.new if it exists
             # Proxmox's pvenetcommit.service copies .new -> interfaces on first boot

@@ -1,0 +1,28 @@
+services:
+  builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: proxmox-maas-builder
+    volumes:
+      - ./debian:/build/debian
+      - ./scripts:/build/scripts:ro
+      - ./README.md:/build/README.md:ro
+      - packer-cache:/home/builder/.cache/packer
+    devices:
+      - /dev/kvm:/dev/kvm
+      - /dev/fuse:/dev/fuse
+    privileged: false
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    group_add:
+      - "${KVM_GID}"  # KVM group ID from host
+    environment:
+      - PACKER_CACHE_DIR=/home/builder/.cache/packer
+    restart: "no"
+
+volumes:
+  packer-cache:
+    driver: local

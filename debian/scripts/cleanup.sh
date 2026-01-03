@@ -32,6 +32,14 @@ rm -r /etc/ssh/ssh_host_*
 # Proxmox installation creates this file, but it must not exist in the image
 rm -f /etc/hostname
 
+# Clean up packer-debian hostname from /etc/hosts
+# This entry is created during the build process but should not be in the final image
+# Remove any line containing "packer-debian"
+sed -i '/packer-debian/d' /etc/hosts
+
+# Also remove the build-time IP entry (10.0.2.15 is QEMU NAT default)
+sed -i '/^10\.0\.2\.15/d' /etc/hosts
+
 # Clean cloud-init state so it runs fresh on MAAS deployment
 # This must run AFTER Proxmox installation since Proxmox packages may trigger cloud-init
 echo "Cleaning cloud-init state..."
