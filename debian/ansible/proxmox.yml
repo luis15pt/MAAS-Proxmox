@@ -102,23 +102,25 @@
         autoremove: yes
       ignore_errors: yes
 
-    # Create debug user for console access (debugging network issues)
-    - name: Create debug user with password
-      user:
-        name: debug
-        password: "$6$7QbUPV7dKh9BXDTP$hqnif1xKJObYPOR3ZP2s2JeIp7Xvkubu2v1aIS5uFLEIVBXVBHaZStlQ9Kd.Ye89fWno7lNppsf3fs18W8C0k/"  # password: proxmox123
-        shell: /bin/bash
-        groups: sudo
-        append: yes
-        state: present
-        create_home: yes
+    # Optional: Create debug user for console access (uncomment if needed)
+    # Useful for debugging network issues when SSH key authentication fails
+    # Default credentials: debug/proxmox123
+    # - name: Create debug user with password
+    #   user:
+    #     name: debug
+    #     password: "$6$7QbUPV7dKh9BXDTP$hqnif1xKJObYPOR3ZP2s2JeIp7Xvkubu2v1aIS5uFLEIVBXVBHaZStlQ9Kd.Ye89fWno7lNppsf3fs18W8C0k/"  # password: proxmox123
+    #     shell: /bin/bash
+    #     groups: sudo
+    #     append: yes
+    #     state: present
+    #     create_home: yes
 
-    - name: Enable password authentication for console
-      lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: '^#?PasswordAuthentication'
-        line: 'PasswordAuthentication yes'
-        state: present
+    # - name: Enable password authentication for console
+    #   lineinfile:
+    #     path: /etc/ssh/sshd_config
+    #     regexp: '^#?PasswordAuthentication'
+    #     line: 'PasswordAuthentication yes'
+    #     state: present
 
     # CRITICAL: Disable systemd-networkd to prevent conflict with ifupdown2
     # Debian 13 cloud images come with systemd-networkd enabled by default

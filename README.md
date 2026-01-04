@@ -87,7 +87,6 @@ sg kvm -c "make proxmox"
 - Cloud-init configured for Proxmox compatibility
 - ifupdown2 network management with vmbr0 bridge
 - Comprehensive network support: bonds, VLANs, static routes, bridges
-- Debug user for console access (debug/proxmox123)
 - All Proxmox services start automatically
 
 ### 3. Upload to MAAS
@@ -271,7 +270,21 @@ systemctl status networking         # Should be active
 
 ### Cannot login via console
 
-Use debug user for console access:
+**Option 1**: SSH in using the default `debian` user and your MAAS SSH key:
+```bash
+ssh debian@<machine-ip>
+sudo -i
+```
+
+**Option 2**: Enable debug user (optional)
+
+If you need console access without SSH keys (useful for debugging network issues), you can enable a debug user before building the image:
+
+1. Edit `debian/ansible/proxmox.yml`
+2. Uncomment the "Create debug user" and "Enable password authentication" tasks (lines 105-123)
+3. Rebuild the image
+
+Default credentials after enabling:
 ```
 Username: debug
 Password: proxmox123
