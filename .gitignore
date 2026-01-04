@@ -19,3 +19,11 @@ crash.log
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Screenshots and test files
+Screenshot*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
