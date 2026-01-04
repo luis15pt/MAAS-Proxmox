@@ -59,43 +59,90 @@ def configure_proxmox_network(config, target):
 
     ethernets = network.get('ethernets', {})
     bonds = network.get('bonds', {})
+    vlans = network.get('vlans', {})
+    bridges = network.get('bridges', {})
 
-    # Find the interface with IP configuration (check bonds first, then ethernets)
+    # Find the interface with IP configuration
+    # Priority: bridges > vlans > bonds > ethernets
     configured = False
     bridge_port = None
     ip_address = None
     gateway = None
     dns_servers = None
     bond_config = None
+    vlan_config = None
+    static_routes = []
 
-    # Check for bonds first (priority over direct ethernet)
-    for bond_name, bond_cfg in bonds.items():
-        if 'addresses' in bond_cfg and bond_cfg['addresses']:
-            bridge_port = bond_name
-            ip_address = bond_cfg['addresses'][0]
-            gateway = bond_cfg.get('gateway4') or bond_cfg.get('gateway')
-            nameservers = bond_cfg.get('nameservers', {})
+    # Check for existing bridges first (if MAAS created one)
+    for bridge_name, bridge_cfg in bridges.items():
+        if 'addresses' in bridge_cfg and bridge_cfg['addresses']:
+            # MAAS created a bridge, use it directly as vmbr0
+            bridge_port = bridge_cfg.get('interfaces', [None])[0]
+            ip_address = bridge_cfg['addresses'][0]
+            gateway = bridge_cfg.get('gateway4') or bridge_cfg.get('gateway')
+            nameservers = bridge_cfg.get('nameservers', {})
             dns_servers = nameservers.get('addresses', ['8.8.8.8', '8.8.4.4'])
-
-            # Extract bond configuration
-            bond_params = bond_cfg.get('parameters', {})
-            bond_interfaces = bond_cfg.get('interfaces', [])
-
-            bond_config = {
-                'name': bond_name,
-                'interfaces': bond_interfaces,
-                'mode': bond_params.get('mode', '802.3ad'),
-                'miimon': bond_params.get('mii-monitor-interval', 100),
-                'lacp_rate': bond_params.get('lacp-rate', 'fast'),
-                'xmit_hash_policy': bond_params.get('transmit-hash-policy', 'layer2+3'),
-            }
-
-            print(f"DEBUG: Found bond {bond_name} with IP configuration")
-            print(f"  - Bond slaves: {bond_interfaces}")
-            print(f"  - Bond mode: {bond_config['mode']}")
+            static_routes = bridge_cfg.get('routes', [])
+            print(f"DEBUG: Found MAAS bridge {bridge_name} with IP configuration")
+            print(f"  - Bridge port: {bridge_port}")
             break
 
-    # If no bond found, check ethernet interfaces
+    # Check for VLANs
+    if not bridge_port:
+        for vlan_name, vlan_cfg in vlans.items():
+            if 'addresses' in vlan_cfg and vlan_cfg['addresses']:
+                bridge_port = vlan_name
+                ip_address = vlan_cfg['addresses'][0]
+                gateway = vlan_cfg.get('gateway4') or vlan_cfg.get('gateway')
+                nameservers = vlan_cfg.get('nameservers', {})
+                dns_servers = nameservers.get('addresses', ['8.8.8.8', '8.8.4.4'])
+                static_routes = vlan_cfg.get('routes', [])
+
+                # Extract VLAN configuration
+                vlan_id = vlan_cfg.get('id')
+                vlan_link = vlan_cfg.get('link')
+
+                vlan_config = {
+                    'name': vlan_name,
+                    'id': vlan_id,
+                    'link': vlan_link,
+                }
+
+                print(f"DEBUG: Found VLAN {vlan_name} with IP configuration")
+                print(f"  - VLAN ID: {vlan_id}")
+                print(f"  - Parent interface: {vlan_link}")
+                break
+
+    # Check for bonds
+    if not bridge_port:
+        for bond_name, bond_cfg in bonds.items():
+            if 'addresses' in bond_cfg and bond_cfg['addresses']:
+                bridge_port = bond_name
+                ip_address = bond_cfg['addresses'][0]
+                gateway = bond_cfg.get('gateway4') or bond_cfg.get('gateway')
+                nameservers = bond_cfg.get('nameservers', {})
+                dns_servers = nameservers.get('addresses', ['8.8.8.8', '8.8.4.4'])
+                static_routes = bond_cfg.get('routes', [])
+
+                # Extract bond configuration
+                bond_params = bond_cfg.get('parameters', {})
+                bond_interfaces = bond_cfg.get('interfaces', [])
+
+                bond_config = {
+                    'name': bond_name,
+                    'interfaces': bond_interfaces,
+                    'mode': bond_params.get('mode', '802.3ad'),
+                    'miimon': bond_params.get('mii-monitor-interval', 100),
+                    'lacp_rate': bond_params.get('lacp-rate', 'fast'),
+                    'xmit_hash_policy': bond_params.get('transmit-hash-policy', 'layer2+3'),
+                }
+
+                print(f"DEBUG: Found bond {bond_name} with IP configuration")
+                print(f"  - Bond slaves: {bond_interfaces}")
+                print(f"  - Bond mode: {bond_config['mode']}")
+                break
+
+    # Check ethernet interfaces
     if not bridge_port:
         for iface_name, iface_cfg in ethernets.items():
             if 'addresses' in iface_cfg and iface_cfg['addresses']:
@@ -104,6 +151,7 @@ def configure_proxmox_network(config, target):
                 gateway = iface_cfg.get('gateway4') or iface_cfg.get('gateway')
                 nameservers = iface_cfg.get('nameservers', {})
                 dns_servers = nameservers.get('addresses', ['8.8.8.8', '8.8.4.4'])
+                static_routes = iface_cfg.get('routes', [])
                 print(f"DEBUG: Found ethernet interface {iface_name} with IP configuration")
                 break
 
@@ -115,6 +163,8 @@ def configure_proxmox_network(config, target):
     print(f"  - IP Address: {ip_address}")
     print(f"  - Gateway: {gateway}")
     print(f"  - DNS Servers: {dns_servers}")
+    if static_routes:
+        print(f"  - Static routes: {len(static_routes)} route(s)")
 
     # Write /etc/network/interfaces
     interfaces_path = os.path.join(target, "etc/network/interfaces")
@@ -147,6 +197,21 @@ def configure_proxmox_network(config, target):
             interfaces_content.append(f"    bond-xmit-hash-policy {bond_config['xmit_hash_policy']}\n")
 
         interfaces_content.append("\n")
+    elif vlan_config:
+        # Configure parent interface for VLAN
+        parent_iface = vlan_config['link']
+        interfaces_content.append(f"auto {parent_iface}\n")
+        interfaces_content.append(f"iface {parent_iface} inet manual\n")
+        interfaces_content.append("\n")
+
+        # Configure VLAN interface
+        vlan_name = vlan_config['name']
+        vlan_id = vlan_config['id']
+        interfaces_content.append(f"auto {vlan_name}\n")
+        interfaces_content.append(f"iface {vlan_name} inet manual\n")
+        interfaces_content.append(f"    vlan-raw-device {parent_iface}\n")
+        interfaces_content.append(f"    vlan-id {vlan_id}\n")
+        interfaces_content.append("\n")
     else:
         # Simple ethernet interface
         interfaces_content.append(f"auto {bridge_port}\n")
@@ -162,6 +227,21 @@ def configure_proxmox_network(config, target):
     interfaces_content.append(f"    bridge-ports {bridge_port}\n")
     interfaces_content.append("    bridge-stp off\n")
     interfaces_content.append("    bridge-fd 0\n")
+
+    # Add static routes if configured
+    if static_routes:
+        for route in static_routes:
+            to = route.get('to')
+            via = route.get('via')
+            metric = route.get('metric')
+
+            if to and via:
+                route_cmd = f"    up ip route add {to} via {via}"
+                if metric:
+                    route_cmd += f" metric {metric}"
+                interfaces_content.append(route_cmd + "\n")
+                print(f"DEBUG: Added static route: {to} via {via}")
+
     interfaces_content.append("\n")
     interfaces_content.append("source /etc/network/interfaces.d/*\n")
 
