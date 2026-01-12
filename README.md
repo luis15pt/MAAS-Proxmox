@@ -144,6 +144,35 @@ Replace `admin` with your MAAS profile name.
 
 The curtin-hooks script automatically converts MAAS netplan configuration to Proxmox `/etc/network/interfaces` format during deployment. All network configurations are bridged via **vmbr0** for VM networking.
 
+### IMPORTANT: IP Assignment Configuration
+
+**⚠️ CRITICAL: Use "Auto assign" or "Static assign" - NOT "DHCP"**
+
+When configuring network interfaces in MAAS:
+
+- ✅ **Auto assign** (Recommended): MAAS picks an available static IP from the subnet pool during deployment and writes it permanently to `/etc/network/interfaces`. The machine never contacts a DHCP server - the IP is hardcoded.
+
+- ✅ **Static assign**: You manually specify the exact static IP address. Same as Auto assign but you choose the IP.
+
+- ❌ **DHCP**: The machine broadcasts DHCP requests at runtime. **This will NOT work** - the curtin-hooks script requires a static IP in the configuration (it looks for the `addresses` field which is only present with static IPs).
+
+**Why Proxmox needs static IPs:**
+- Hypervisors need stable, predictable IPs for management
+- VMs/containers need to reach the host at a known address
+- Cluster members need reliable communication
+- DHCP leases could potentially change after reboots
+
+**⚠️ Do NOT create bridges in MAAS**
+
+The curtin-hooks script automatically creates the **vmbr0** bridge during deployment. If you create a bridge in MAAS, you may encounter conflicts or unexpected behavior. Configure your interfaces (bonds, VLANs, ethernet) with static IPs, and let the deployment script create vmbr0.
+
+**⚠️ Bond Configuration: Enable Link Monitoring**
+
+If using network bonds (especially with only one physical cable connected):
+- Set **mii-monitor-interval** to `100` (or higher) - this monitors link status every 100ms
+- Never use `0` - this disables link monitoring and the bond won't detect which interface is connected
+- Without link monitoring, the bond may try to use a disconnected interface, resulting in no network connectivity
+
 ### Supported Network Topologies
 
 The image supports all MAAS network configurations:
