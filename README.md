@@ -247,12 +247,25 @@ The image supports multiple MAAS storage layouts. The curtin-hooks script automa
   maas $PROFILE machine set-storage-layout $SYSTEM_ID storage_layout=lvm
   ```
 
+**✅ ZFS Layout**
+- ZFS pool: `rpool` with `rpool/ROOT/zfsroot` dataset for root filesystem
+- Built-in compression enabled (saves disk space automatically)
+- Native snapshots, data integrity with checksumming
+- ARC caching improves read performance
+- Proxmox uses directory storage on ZFS root filesystem
+- Configure in MAAS Web UI:
+  1. Machine → Storage → Select boot disk
+  2. Delete existing partitions
+  3. Add partition → Filesystem: **zfsroot** → Mount point: **/**
+  4. Add EFI partition (512MB, FAT32, `/boot/efi`)
+
 ### Storage Layout Comparison
 
-| Layout | Filesystem | Flexibility | Snapshots | VM Storage | Best For |
-|--------|-----------|-------------|-----------|------------|----------|
-| **Flat** | ext4 on partition | Low | No | Directory on / | Simple deployments, maximum performance |
-| **LVM** | ext4 on LV | High | Yes (manual) | Directory on / | Advanced users, future flexibility |
+| Layout | Filesystem | Flexibility | Snapshots | VM Storage | Data Integrity | Best For |
+|--------|-----------|-------------|-----------|------------|----------------|----------|
+| **Flat** | ext4 on partition | Low | No | Directory on / | Basic | Simple deployments, maximum performance |
+| **LVM** | ext4 on LV | High | Yes (manual) | Directory on / | Basic | Advanced users, future flexibility |
+| **ZFS** | ZFS datasets | Very High | Yes (native) | Directory on / | Excellent (checksums) | Production systems, data integrity priority, 16GB+ RAM |
 
 ### Storage After Deployment
 
@@ -262,14 +275,51 @@ After deployment, Proxmox VE provides:
 
 **Note**: The default MAAS LVM layout creates a single logical volume for the root filesystem. This differs from a standard Proxmox installation which creates separate LVs for root, data (thin pool), and swap. Both configurations work - Proxmox can store VMs on directory storage.
 
+<details>
+<summary><h4>Optional: Configure Proxmox ZFS Storage for VMs</h4></summary>
+
+If you deployed with ZFS root, you can create dedicated ZFS datasets for VM storage:
+
+```bash
+# SSH to the deployed Proxmox machine
+ssh debian@<machine-ip>
+sudo -i
+
+# Create ZFS dataset for VM disks
+zfs create rpool/data
+
+# Optional: Create dataset for container templates
+zfs create rpool/data/subvol-templates
+
+# Add ZFS storage to Proxmox (will be available after next PVE service restart)
+# This happens automatically - Proxmox detects the rpool
+
+# Or manually add via pvesm:
+pvesm add zfspool local-zfs --pool rpool/data --content images,rootdir
+```
+
+**Benefits:**
+- Native ZFS snapshots for VMs/containers
+- Compression saves disk space
+- Data integrity with checksumming
+- Clone VMs instantly with ZFS clones
+
+**Memory Requirements:**
+- Minimum: 8GB RAM
+- Recommended: 16GB+ RAM for production
+- ZFS ARC cache will use available memory
+
+</details>
+
 ### Untested Storage Layouts
 
 The following MAAS storage layouts have not been tested yet:
-- LVM-Thin
-- Bcache
-- ZFS
-- Software RAID (0, 1, 5, 6, 10)
-- Multiple disk configurations
+- **LVM-Thin**: MAAS doesn't have a built-in layout for thin provisioning. Possible workarounds:
+  - Use LVM layout, leave space unused, configure thin pool post-deployment
+  - Use multi-disk setup with second disk for thin pool
+- **Bcache**: SSD caching for HDD storage
+- **Software RAID** (0, 1, 5, 6, 10): RAID configurations
+- **Multiple disk configurations**: Complex multi-disk setups, ZFS RAID-Z
 
 Contributions and testing reports for these layouts are welcome!
 
