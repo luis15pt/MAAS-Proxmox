@@ -339,6 +339,12 @@ def main():
             f.write("deb http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware\n")
             f.write("deb http://download.proxmox.com/debian/pve trixie pve-no-subscription\n")
 
+        print("DEBUG: Removing apt source configuration from maas")
+        config_without_network['apt']['preserve_sources_list'] = True
+        config_without_network['apt']['sources'] = {}
+        config_without_network['apt']['sources_list'] = {}
+
+
     # CRITICAL FIX: Use {'install': False} to disable kernel installation
     # Setting kernel=None causes AttributeError in curtin's install_kernel() at line 377
     # According to curtin source, install_kernel() checks for kernel: {install: false}
