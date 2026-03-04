@@ -84,6 +84,7 @@ def configure_proxmox_network(config, target):
     required_ethernet_blocks = set()
     dns_servers = set()
     iface_configs = {}
+    links = {}
 
     # Bridges
     for iface_name, iface in bridges.items():
@@ -131,6 +132,10 @@ def configure_proxmox_network(config, target):
             else:
                 iface_configs[iface_name] = iface_config
 
+        if "match" in iface and "macaddress" in iface.get("match",{}):
+            links[iface_name] = iface.get("match",{}).get("macaddress")
+
+
     # Write /etc/network/interfaces
     interfaces_path = os.path.join(target, "etc/network/interfaces")
     interfaces_content = []
@@ -170,6 +175,24 @@ def configure_proxmox_network(config, target):
     print("-" * 80)
     print(''.join(interfaces_content))
     print("-" * 80)
+
+    # Generate systemd network link files to enforce maas link names
+    for link_name, link_mac in links.items():
+        link_file_name = os.path.join(target,f"etc/systemd/network/10-{link_name}.link")
+        link_file_content = [
+            "[Match]\n",
+            f"MACAddress={ link_mac }\n"
+            "Type=ether\n\n"
+            "[Link]\n",
+            f"Name={link_name}\n"
+        ]
+        with open(link_file_name, 'w') as f:
+            f.writelines(link_file_content)
+
+        print(f"DEBUG: Created {link_file_name} with contents:")
+        print("-" * 80)
+        print(''.join(link_file_content))
+        print("-" * 80)
 
     # Write DNS servers directly to /etc/resolv.conf
     # Proxmox web UI manages /etc/resolv.conf directly, not via dns-nameservers in /etc/network/interfaces
