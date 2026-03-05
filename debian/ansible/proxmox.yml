@@ -75,6 +75,7 @@
       apt:
         name:
           - proxmox-ve
+          - proxmox-secure-boot-support
           - postfix
           - open-iscsi
           - chrony
@@ -101,6 +102,12 @@
         state: absent
         autoremove: yes
       ignore_errors: yes
+
+    - name: Upgrade packages
+      apt:
+        upgrade: yes
+        update_cache: yes
+        cache_valid_time: 86400 #One day
 
     # Optional: Create debug user for console access (uncomment if needed)
     # Useful for debugging network issues when SSH key authentication fails
