@@ -52,6 +52,29 @@ chmod 644 /etc/ssh/sshd_config.d/00-maas-proxmox.conf
 # Build leftovers in root's home
 rm -rf /root/.ansible /root/.wget-hsts
 
+# Proxmox cluster filesystem (pmxcfs) database from the build VM. It holds
+# secrets that every deployed host would otherwise share: the build host's
+# root SSH key in /etc/pve/priv/authorized_keys (root@packer-debian), the
+# cluster CA key (pve-root-ca.key), the API ticket signing key (authkey.key),
+# the CSRF key (pve-www.key) and the packer-debian node certificate.
+# Delete it so first boot starts with an empty database; pveproxy's
+# ExecStartPre (pvecm updatecerts) then generates fresh, per-host keys and
+# certificates, as on a normal Proxmox install. root's authorized_keys ends
+# up with only the key MAAS supplies plus the host's own new root key
+# (Proxmox needs that one for clustering).
+for svc in pve-ha-lrm pve-ha-crm pvescheduler pvestatd pveproxy pvedaemon \
+           spiceproxy pve-firewall pve-cluster; do
+    systemctl stop "$svc" 2>/dev/null || true
+done
+rm -f /var/lib/pve-cluster/config.db /var/lib/pve-cluster/config.db-wal \
+      /var/lib/pve-cluster/config.db-shm
+rm -rf /var/lib/pve-cluster/backup
+# /etc/pve is only a mountpoint once pmxcfs is stopped; it must be empty.
+if [ -n "$(ls -A /etc/pve 2>/dev/null)" ]; then
+    echo "ERROR: /etc/pve not empty after stopping pve-cluster" >&2
+    exit 1
+fi
+
 # Remove /etc/hostname so MAAS can set it during deployment
 # Proxmox installation creates this file, but it must not exist in the image
 rm -f /etc/hostname

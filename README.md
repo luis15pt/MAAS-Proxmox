@@ -102,6 +102,7 @@ sg kvm -c "make proxmox"
 - EFI fallback boot path for broad firmware compatibility
 - Proxmox no-subscription apt repositories preserved during deployment; the enterprise repo ships disabled (`Enabled: no`) so `apt-get update` works without a subscription
 - Key-only SSH (`PasswordAuthentication no`, root key login only), root password locked
+- No build-time secrets: the Proxmox cluster database from the build VM is removed, so each host generates its own CA, API ticket key, node certificate and root SSH key on first boot; root's `authorized_keys` holds only the MAAS-supplied key and the host's own root key
 - All Proxmox services start automatically
 
 ### 3. Upload to MAAS
