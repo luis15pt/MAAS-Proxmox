@@ -20,8 +20,9 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Packer (latest version)
+# Install Packer (pinned version, checksum from HashiCorp's SHA256SUMS)
 RUN wget -O /tmp/packer.zip https://releases.hashicorp.com/packer/1.11.2/packer_1.11.2_linux_amd64.zip \
+    && echo "ced13efc257d0255932d14b8ae8f38863265133739a007c430cae106afcfc45a  /tmp/packer.zip" | sha256sum -c - \
     && unzip /tmp/packer.zip -d /usr/local/bin/ \
     && rm /tmp/packer.zip \
     && chmod +x /usr/local/bin/packer

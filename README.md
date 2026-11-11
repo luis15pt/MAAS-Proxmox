@@ -19,13 +19,14 @@ Based on Debian 13 (Trixie) with cloud-init integration for seamless MAAS provis
 - Ubuntu 22.04 or later
 - Packer installed
 - KVM/QEMU support
-- Sufficient disk space (~5GB for build artifacts)
+- Sufficient disk space (~15GB free: the build VM disk plus the ~2.9GB tarball)
 - User must be member of the `kvm` group
 
 ### MAAS Server
 
-- MAAS 3.x or later
-- Network connectivity to build machine
+- MAAS 3.x or later (tested with MAAS 3.8.0, snap)
+- PXE/DHCP on the deployment VLAN: either MAAS-managed DHCP or an external DHCP server pointing at MAAS (next-server + `bootx64.efi`)
+- Enough RAM on the MAAS server to accept ~3GB uploads (see "MAAS upload / deploy errors" under Troubleshooting)
 - SSH access for file transfers
 
 ## Quick Start
@@ -56,10 +57,12 @@ sudo docker compose logs -f
 
 **Note:** The `-E` flag preserves the `KVM_GID` environment variable when using sudo.
 
-**Output**: `debian/proxmox-ve-13-cloudimg.tar.gz` (~2.4GB)
+**Output**: `debian/proxmox-ve-13-cloudimg.tar.gz` (~2.9GB)
 **Build time**: ~45-55 minutes
 
-The container will automatically clean up after the build completes. The output file will be in the `debian/` directory.
+The output file will be in the `debian/` directory.
+
+> **⚠️ Each build deletes the previous output first** (`debian/*.tar.gz`, `output-*`, OVMF files). Move an image you want to keep out of `debian/` before rebuilding.
 
 ### Option B: Manual Build (Native)
 
@@ -86,7 +89,7 @@ packer plugins install github.com/hashicorp/ansible
 sg kvm -c "make proxmox"
 ```
 
-**Output**: `proxmox-ve-13-cloudimg.tar.gz` (~2.4GB)
+**Output**: `proxmox-ve-13-cloudimg.tar.gz` (~2.9GB)
 **Build time**: ~45-55 minutes
 
 **What's included**:
@@ -98,6 +101,7 @@ sg kvm -c "make proxmox"
 - Comprehensive network support: bonds, VLANs, static routes, bridges
 - EFI fallback boot path for broad firmware compatibility
 - Proxmox no-subscription apt repositories preserved during deployment; the enterprise repo ships disabled (`Enabled: no`) so `apt-get update` works without a subscription
+- Key-only SSH (`PasswordAuthentication no`, root key login only), root password locked
 - All Proxmox services start automatically
 
 ### 3. Upload to MAAS
@@ -144,7 +148,7 @@ Replace `admin` with your MAAS profile name.
 - ✅ **Bond Link Monitoring**: If using bonds, set `mii-monitor-interval` to `100` (not `0`)
 - ✅ **No Bridges**: Do NOT create bridges in MAAS (vmbr0 is created automatically)
 - ✅ **BIOS Settings**: UEFI enabled, Secure Boot supported
-- ✅ **MAAS Settings**: SSH key configured in MAAS
+- ✅ **MAAS Settings**: SSH key configured in MAAS (the deployed login user is `debian`, with passwordless sudo)
 
 <details>
 <summary><h3>Why These Settings Matter</h3></summary>
@@ -237,8 +241,10 @@ All layouts use directory storage at `/var/lib/vz` for VMs/containers after depl
 
 1. **MAAS UI** → Select machine → **Deploy**
 2. Choose **"Proxmox VE 9.1"** OS
-3. ✅ **Enable "Sync hardware"** checkbox (syncs vmbr0 bridge back to MAAS for visibility)
-4. Click **Deploy** (~10-15 minutes)
+3. Optional: **"Sync hardware"** (syncs the vmbr0 bridge back to MAAS for visibility). See the security note below before enabling it.
+4. Click **Deploy** (~10-15 minutes on bare metal, ~5 minutes on a VM)
+
+> **Security note on "Sync hardware":** it installs `maas_hardware_sync.timer`, which keeps a MAAS API token on the host and runs a MAAS-provided script as root every 15 minutes. Anyone who controls your MAAS server then controls every synced hypervisor. Leave it off unless you need the inventory sync, and keep MAAS on a management network.
 
 ### Post-Deployment
 
@@ -246,16 +252,20 @@ All layouts use directory storage at `/var/lib/vz` for VMs/containers after depl
 # SSH to deployed machine
 ssh debian@<machine-ip>
 
-# Set root password for Proxmox UI access
-echo "root:your-password" | sudo chpasswd
+# Set root password for Proxmox UI access (prompts; keeps it out of shell history)
+sudo passwd root
 
 # Access Proxmox web UI
 # https://<machine-ip>:8006
 # Login: root@pam
 ```
 
+The root password is only for the web UI (PAM realm). SSH stays key-only:
+`/etc/ssh/sshd_config.d/00-maas-proxmox.conf` sets `PasswordAuthentication no` and
+`PermitRootLogin prohibit-password`. Remove that file only if you really want password SSH.
+
 **Optional post-deployment tasks:**
-- Disable subscription nag: Edit `/etc/apt/sources.list.d/pve-enterprise.list`
+- Enterprise repo: ships disabled in `/etc/apt/sources.list.d/pve-enterprise.sources` (`Enabled: no`); set it to `yes` if you add a subscription. (The "No valid subscription" login popup is a separate UI notice.)
 - Update packages: `apt update && apt upgrade`
 - Configure additional storage or join Proxmox cluster
 
@@ -329,7 +339,11 @@ hostnamectl           # Verify hostname is set
 
 SSH using MAAS key: `ssh debian@<machine-ip>` then `sudo -i`
 
-To enable debug console user, edit `debian/ansible/proxmox.yml` before building and uncomment debug user tasks (lines 105-123).
+To enable a debug console user, edit `debian/ansible/proxmox.yml` before building and uncomment the "Optional: Create debug user" tasks. **Debug only:** the commented hash is the public password `proxmox123`; change it, and never ship that image to production. SSH password login stays off either way (see `00-maas-proxmox.conf`), so the user is for the console.
+
+**Verifying the SSH host key**
+
+MAAS's rsyslog shows host key fingerprints printed during deployment, but those come from the temporary Ubuntu install environment, not the installed Proxmox. Compare against the installed system instead (for example the console after first boot, or the disk).
 
 **Build failures**
 
@@ -343,7 +357,18 @@ FUSE errors: `sudo modprobe fuse`
 
 **Boots to EFI shell**
 
-Ensure UEFI boot is enabled in BIOS/IPMI. Secure Boot is supported but may need to be disabled on some firmware that doesn't trust the Debian shim.
+Ensure UEFI boot is enabled in BIOS/IPMI. Secure Boot works with firmware that has the Microsoft UEFI CA (tested: OVMF with pre-enrolled keys); disable it only on firmware that doesn't trust the shim.
+
+**MAAS upload / deploy errors**
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| `cannot identify base image compatible with amd64/generic` | Image uploaded as `custom/<name>`. Re-upload with the bare name (see [Upload to MAAS](#3-upload-to-maas)). |
+| `Missing boot image custom/amd64/...` right after upload | Upload not processed yet. Wait for `"complete": true`. |
+| `[Errno 13] Permission denied` on `content@=` | MAAS snap can't read the file. Copy it to `/var/snap/maas/common/`. |
+| Upload returns HTTP 500 / `timed out` | MAAS region workers ran out of memory (several ~3GB uploads, no swap). `sudo snap restart maas`, then retry; give the MAAS server swap or more RAM. |
+| Deploy fails in curtin with `apt-get update` 401 from `enterprise.proxmox.com` | Image built before the enterprise-repo fix. Rebuild from current `main`. |
+| Deployed host waits minutes at boot before starting Proxmox | UEFI BootOrder keeps PXE first (normal for MAAS: it answers each PXE boot with "boot local disk"). If MAAS/DHCP isn't reachable, the firmware waits for the PXE timeout and then boots from disk. Keep MAAS reachable, or move the `debian` entry first with `efibootmgr -o` if the host leaves MAAS. |
 
 **RAID boot not working**
 
@@ -363,6 +388,12 @@ MAAS places the EFI System Partition on the md array (e.g., `md0p1`). UEFI firmw
 </details>
 
 </details>
+
+## Tested With
+
+- MAAS 3.8.0 (snap), MAAS-managed DHCP, manual power
+- Proxmox VE VM as the target: q35, OVMF with Secure Boot keys enrolled, virtio NIC, 32GB virtio-scsi disk
+- Result: commission → deploy OK; PVE 9.2.26 on kernel 7.0.14-pve; vmbr0 static IP; all PVE services active; web UI on :8006; `apt-get update` clean; SSH key-only
 
 ## References
 

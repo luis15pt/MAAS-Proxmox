@@ -47,9 +47,8 @@ else
         apt-get install -y grub-cloud-${ARCH} grub-pc
 fi
 
-# Bookworm+ does not include this, but curtin requires this during the installation.
+# The cloud image doesn't ship efibootmgr, but curtin requires it during the
+# installation. Install it from the (signed) Debian archive.
 if [ ${DEBIAN_VERSION} == '12' ] || [ ${DEBIAN_VERSION} == '13' ]; then
-        wget http://ftp.us.debian.org/debian/pool/main/e/efibootmgr/efibootmgr_17-1_${ARCH}.deb
-        dpkg -i efibootmgr_17-1_${ARCH}.deb
-        rm efibootmgr_17-1_${ARCH}.deb
+        apt-get install -y efibootmgr
 fi

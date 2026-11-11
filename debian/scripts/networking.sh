@@ -69,6 +69,8 @@ chmod 755 /usr/local/bin/netplan
 if [ ${DEBIAN_VERSION} == '12' ] || [ ${DEBIAN_VERSION} == '13' ]; then
      apt-get -y install python3-netifaces isc-dhcp-client python3-six
      wget https://launchpad.net/~ubuntu-security/+archive/ubuntu/ubuntu-security-collab/+build/26002103/+files/cloud-init_23.1.2-0ubuntu0~23.04.1_all.deb
+     # Pinned: matches the SHA256 in Ubuntu's lunar-security Packages index
+     echo "26639758b72ea5906d58678b8abb0011fd7d3c010f2ff35c46d946d8f9f36c2e  cloud-init_23.1.2-0ubuntu0~23.04.1_all.deb" | sha256sum -c -
      dpkg -i cloud-init_23.1.2-0ubuntu0~23.04.1_all.deb
      rm cloud-init_23.1.2-0ubuntu0~23.04.1_all.deb
 else

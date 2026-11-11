@@ -28,6 +28,30 @@ sed -i s/^root:[^:]*/root:*/ /etc/shadow
 rm -r /root/.ssh
 rm -r /etc/ssh/ssh_host_*
 
+# The packer_backup restore above can't be trusted for sshd: /run is a tmpfs
+# and the bootcmd that fills it runs on every boot, so after the mid-build
+# reboot the "backup" is the already-modified file. Revert the build-time SSH
+# settings explicitly:
+# - user-data's runcmd set "PermitRootLogin yes" in sshd_config
+# - ssh_pwauth: True made cloud-init write sshd_config.d/50-cloud-init.conf
+#   with "PasswordAuthentication yes"
+sed -i -e 's/^PermitRootLogin yes$/#PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+rm -f /etc/ssh/sshd_config.d/50-cloud-init.conf
+# Key-only SSH on the deployed host. Root keeps key login (Proxmox clustering
+# needs it). Setting a root password for the web UI (PAM realm, port 8006)
+# does not open password SSH. sshd uses the first value it reads, and
+# sshd_config.d is included at the top of sshd_config, so this file wins.
+cat > /etc/ssh/sshd_config.d/00-maas-proxmox.conf <<'EOF'
+# Installed by MAAS-Proxmox image build. Remove to change SSH auth policy.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+EOF
+chmod 644 /etc/ssh/sshd_config.d/00-maas-proxmox.conf
+
+# Build leftovers in root's home
+rm -rf /root/.ansible /root/.wget-hsts
+
 # Remove /etc/hostname so MAAS can set it during deployment
 # Proxmox installation creates this file, but it must not exist in the image
 rm -f /etc/hostname
