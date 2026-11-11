@@ -107,7 +107,7 @@ build {
 
   provisioner "file" {
     destination = "/tmp/"
-    sources     = ["${path.root}/scripts/curtin-hooks"]
+    sources     = ["${path.root}/curtin/curtin-hooks"]
   }
 
   provisioner "shell" {

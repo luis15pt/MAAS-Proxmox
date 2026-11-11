@@ -1,6 +1,6 @@
 # MAAS Proxmox VE Image Builder
 
-Build Proxmox VE 9.1 images for automated MAAS deployment on bare metal.
+Build Proxmox VE 9 images for automated MAAS deployment on bare metal.
 
 Based on Debian 13 (Trixie) with cloud-init integration for seamless MAAS provisioning. All Proxmox services start automatically after deployment.
 
@@ -90,14 +90,14 @@ sg kvm -c "make proxmox"
 **Build time**: ~45-55 minutes
 
 **What's included**:
-- Proxmox VE 9.1 (pve-no-subscription)
-- Proxmox kernel 6.17.x
+- Proxmox VE 9.x, latest from pve-no-subscription at build time (9.2 as of Nov 2026)
+- Proxmox default kernel (7.0.x as of Nov 2026)
 - Secure Boot support (proxmox-secure-boot-support + shim)
 - Cloud-init configured for Proxmox compatibility
 - ifupdown2 network management with vmbr0 bridge
 - Comprehensive network support: bonds, VLANs, static routes, bridges
 - EFI fallback boot path for broad firmware compatibility
-- Proxmox apt repositories preserved during deployment
+- Proxmox no-subscription apt repositories preserved during deployment; the enterprise repo ships disabled (`Enabled: no`) so `apt-get update` works without a subscription
 - All Proxmox services start automatically
 
 ### 3. Upload to MAAS
@@ -109,13 +109,28 @@ scp proxmox-ve-13-cloudimg.tar.gz ubuntu@<MAAS_IP>:/home/ubuntu/
 # SSH to MAAS server and register the image
 ssh ubuntu@<MAAS_IP>
 sudo maas admin boot-resources create \
-  name='custom/proxmox-ve-9.1' \
+  name='proxmox-ve-9.1' \
+  title='Proxmox VE 9.1' \
   architecture='amd64/generic' \
   filetype='tgz' \
+  base_image='ubuntu/noble' \
   content@=/home/ubuntu/proxmox-ve-13-cloudimg.tar.gz
+
+# Wait until the upload is processed ("complete": true) before deploying
+sudo maas admin boot-resources read | jq '.[] | select(.name|test("proxmox")) | {id, name}'
+sudo maas admin boot-resource read <ID> | jq '[.sets[] | {version, complete}]'
 ```
 
 Replace `admin` with your MAAS profile name.
+
+**Notes:**
+- Use the bare name (`proxmox-ve-9.1`), not `custom/proxmox-ve-9.1`. MAAS 3.8 stores the
+  `custom/` prefix literally but looks the image up by its bare name at deploy time, so a
+  prefixed upload fails with "cannot identify base image compatible with amd64/generic".
+- Deploying before the set is `complete` fails with "Missing boot image".
+- With the MAAS snap, `content@=` must be readable by root inside the snap. If you get
+  `Permission denied`, copy the file to `/var/snap/maas/common/` first.
+- From the CLI, deploy with `osystem=custom distro_series=proxmox-ve-9.1`.
 
 **Next**: See [Deployment Guide](#deployment-guide) for network configuration and deployment steps.
 
@@ -267,13 +282,12 @@ MAAS-Proxmox/
     ├── ansible/
     │   └── proxmox.yml                    # Install & configure Proxmox VE
     ├── curtin/
-    │   └── curtin-hooks                   # MAAS deployment hooks
+    │   └── curtin-hooks                   # MAAS deployment hooks (network → vmbr0, apt, kernel)
     └── scripts/
         ├── essential-packages.sh          # Install base packages
         ├── setup-boot.sh                  # Configure UEFI bootloader
         ├── networking.sh                  # Network configuration
         ├── setup-curtin.sh                # Install curtin hooks
-        ├── curtin-hooks                   # Network bridge configuration
         └── cleanup.sh                     # Image cleanup
 ```
 
@@ -342,7 +356,7 @@ MAAS places the EFI System Partition on the md array (e.g., `md0p1`). UEFI firmw
 
 **Hostname:** Set by MAAS machine name automatically
 
-**Network conversion logic:** Edit `debian/scripts/curtin-hooks` and `debian/curtin/curtin-hooks` before building
+**Network conversion logic:** Edit `debian/curtin/curtin-hooks` before building (the only copy; it is installed into the image at `/curtin/curtin-hooks`)
 
 **Cloud-init config:** See `debian/ansible/proxmox.yml` for Proxmox-specific settings
 

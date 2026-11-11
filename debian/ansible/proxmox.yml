@@ -87,6 +87,24 @@
           - bridge-utils
         state: present
 
+    # proxmox-ve drops deb822 enterprise repo files. Without a subscription they
+    # return 401, which makes curtin's in-target `apt-get update` fail and aborts
+    # the MAAS deployment. Disable them (kept, so they can be re-enabled later).
+    - name: Find Proxmox enterprise repo files
+      find:
+        paths: /etc/apt/sources.list.d
+        patterns: "pve-enterprise.sources,ceph.sources"
+      register: pve_enterprise_sources
+
+    - name: Disable Proxmox enterprise repos
+      lineinfile:
+        path: "{{ item.path }}"
+        regexp: '^Enabled:'
+        line: 'Enabled: no'
+        insertafter: '^Types:'
+      loop: "{{ pve_enterprise_sources.files }}"
+      when: "'enterprise.proxmox.com' in lookup('file', item.path)"
+
     # Remove os-prober (not needed for hypervisor)
     - name: Remove os-prober
       apt:
@@ -230,6 +248,18 @@
       lineinfile:
         path: /etc/cloud/cloud.cfg
         regexp: '^\s*-\s*snap\s*$'
+        state: absent
+
+    # Disable apt-configure cloud-init module
+    # On first boot MAAS sends Ubuntu apt config (archive.ubuntu.com with
+    # $RELEASE). cloud-init renders it into /etc/apt/sources.list as Ubuntu
+    # "trixie" suites, which breaks apt-get update and makes the
+    # package-update-upgrade-install module fail. The image's own Debian and
+    # Proxmox sources in /etc/apt/sources.list.d are already correct.
+    - name: Remove apt-configure from cloud_config_modules list
+      lineinfile:
+        path: /etc/cloud/cloud.cfg
+        regexp: '^\s*-\s*apt[-_]configure\s*$'
         state: absent
 
     - name: Modify cloud-init hosts template to remove 127.0.1.1 line
