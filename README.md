@@ -151,6 +151,8 @@ Replace `admin` with your MAAS profile name.
 - ✅ **BIOS Settings**: UEFI enabled, Secure Boot supported
 - ✅ **MAAS Settings**: SSH key configured in MAAS (the deployed login user is `debian`, with passwordless sudo)
 
+> **⚠️ Keeping data disks (e.g. reinstalling a Ceph node):** MAAS puts **every disk it knows about** into the curtin storage config with `wipe: superblock`, even disks the UI shows as "Unused". Deploying would wipe them (Ceph OSDs included). Before deploying, delete those disks from the machine's Storage tab in MAAS (this only removes MAAS's record, not the data), then check right after starting the deploy that only the OS disk is listed: `maas <profile> machine get-curtin-config <system_id>` (it only works while the machine is Deploying). Re-commissioning adds the disks back.
+
 <details>
 <summary><h3>Why These Settings Matter</h3></summary>
 
@@ -174,38 +176,47 @@ Replace `admin` with your MAAS profile name.
 <details>
 <summary><h4>Supported Network Topologies</h4></summary>
 
-The curtin-hooks script automatically converts MAAS netplan to Proxmox `/etc/network/interfaces` format. All configurations are bridged via **vmbr0** for VM networking.
+The curtin-hooks script converts the MAAS netplan config to Proxmox `/etc/network/interfaces`:
+
+- **Every interface MAAS defines is written**: physical NICs, bonds (mode, miimon, LACP rate, hash policy, up/down delay) and VLANs, with their MTU.
+- **vmbr0 goes on the interface that has the default gateway** (falls back to the first interface with an IP, in bridge > VLAN > bond > NIC order). VMs use vmbr0.
+- **Other IPs stay on their own interface** as static addresses (for example a storage VLAN), with their static routes. Only one default gateway is used.
+- A bridge created in MAAS is replaced by vmbr0 with the same ports.
 
 **Supported:**
 - ✅ Simple Ethernet, Bonds (802.3ad LACP, active-backup, etc.)
-- ✅ VLANs, Static Routes, Nested Bridges
+- ✅ VLANs on NICs or bonds, multiple IP interfaces, static routes, MTU (jumbo frames)
 
-**Bond with active-backup example** (recommended for virtual environments):
+**Example: management IP on a bond plus a VLAN with its own IP** (tested: deploy, failover, tagged traffic):
 ```
-auto ens18
-iface ens18 inet manual
-    bond-master bond0
+auto enp6s18
+iface enp6s18 inet manual
 
-auto ens19
-iface ens19 inet manual
-    bond-master bond0
+auto enp6s19
+iface enp6s19 inet manual
 
 auto bond0
 iface bond0 inet manual
-    bond-slaves ens18 ens19
+    bond-slaves enp6s18 enp6s19
     bond-mode active-backup
     bond-miimon 100
 
+auto bond0.3999
+iface bond0.3999 inet static
+    address 192.0.2.10/24
+    vlan-raw-device bond0
+    vlan-id 3999
+
 auto vmbr0
 iface vmbr0 inet static
-    address 192.168.1.10/24
-    gateway 192.168.1.1
+    address 192.168.8.229/24
+    gateway 192.168.8.254
     bridge-ports bond0
     bridge-stp off
     bridge-fd 0
 ```
 
-**VLAN example**:
+**VLAN on a single NIC** (VMs on vmbr0 land in VLAN 100):
 ```
 auto ens18
 iface ens18 inet manual
@@ -218,7 +229,10 @@ iface vlan100 inet manual
 auto vmbr0
 iface vmbr0 inet static
     address 192.168.100.10/24
+    gateway 192.168.100.1
     bridge-ports vlan100
+    bridge-stp off
+    bridge-fd 0
 ```
 
 </details>
@@ -395,6 +409,8 @@ MAAS places the EFI System Partition on the md array (e.g., `md0p1`). UEFI firmw
 - MAAS 3.8.0 (snap), MAAS-managed DHCP, manual power
 - Proxmox VE VM as the target: q35, OVMF with Secure Boot keys enrolled, virtio NIC, 32GB virtio-scsi disk
 - Result: commission → deploy OK; PVE 9.2.26 on kernel 7.0.14-pve; vmbr0 static IP; all PVE services active; web UI on :8006; `apt-get update` clean; SSH key-only
+- Network layouts: single NIC; active-backup bond (2 NICs) with the management IP + a tagged VLAN with its own IP: deploy OK, 0% ping loss when the active NIC went down, VLAN frames leave tagged. LACP, VLAN-on-NIC, VLAN-only-IP-on-bond, two NICs with separate IPs and MAAS-bridge layouts were checked by rendering MAAS-style configs through the hook.
+- Bare metal: Supermicro X10SDV-8C-TLN4F+ (UEFI, IPMI power), 802.3ad LACP bond of two 10G NICs to a Cisco Nexus port-channel, MTU 9000, static IP: deploy OK; OS on the boot SSD only, the two Ceph OSD disks kept (after removing them from MAAS, see the Pre-Deployment Checklist), node rejoined an existing Proxmox/Ceph cluster and the OSDs were reactivated with their data.
 
 ## References
 

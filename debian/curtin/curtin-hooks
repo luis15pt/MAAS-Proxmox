@@ -25,17 +25,54 @@ from curtin.config import load_command_config
 from curtin.util import load_command_environment
 
 
+DEFAULT_ROUTES = ('0.0.0.0/0', 'default', '::/0')
+
+
+def _gateway(cfg):
+    """IPv4 default gateway of a netplan interface (gateway4 or a default route)."""
+    gw = cfg.get('gateway4') or cfg.get('gateway')
+    if gw:
+        return gw
+    for route in cfg.get('routes', []) or []:
+        if route.get('to') in ('0.0.0.0/0', 'default') and route.get('via'):
+            return route['via']
+    return None
+
+
+def _extra_lines(cfg, skip_default_route):
+    """mtu + static route lines shared by every stanza."""
+    lines = []
+    mtu = cfg.get('mtu')
+    if mtu and int(mtu) != 1500:
+        lines.append(f"    mtu {mtu}\n")
+    for route in cfg.get('routes', []) or []:
+        to, via, metric = route.get('to'), route.get('via'), route.get('metric')
+        if not (to and via):
+            continue
+        if skip_default_route and to in DEFAULT_ROUTES:
+            continue  # rendered as "gateway"
+        cmd = f"    up ip route add {to} via {via}"
+        if metric:
+            cmd += f" metric {metric}"
+        lines.append(cmd + "\n")
+        print(f"DEBUG: Added static route: {to} via {via}")
+    return lines
+
+
 def configure_proxmox_network(config, target):
     """Convert MAAS netplan config to Proxmox /etc/network/interfaces.
 
-    Reads network configuration from curtin config (provided by MAAS),
-    and converts to /etc/network/interfaces format with vmbr0 bridge.
+    Every interface MAAS defines is rendered (ethernets, bonds, VLANs, MAAS
+    bridges), keeping bond parameters and MTUs. The vmbr0 bridge is put on the
+    interface that carries the default gateway (falling back to the first
+    interface with an address, in bridge > VLAN > bond > ethernet order). Any
+    other addresses stay as static addresses on their own interfaces, so a
+    management IP on a bond and a storage IP on a VLAN both survive.
     """
     print("=" * 80)
     print("CURTIN-HOOKS: Converting netplan to Proxmox network configuration...")
     print("=" * 80)
 
-    # Read network config from curtin config (MAAS provides this during deployment)
     network_config = config.get('network', {})
 
     print(f"DEBUG: Full network config received from MAAS:")
@@ -46,210 +83,121 @@ def configure_proxmox_network(config, target):
         print("WARNING: No network config found in curtin config")
         return
 
-    # Extract network configuration
     network = network_config.get('config', network_config)
     if isinstance(network, str):
-        # If it's a string, try to parse it as YAML
         network = yaml.safe_load(network)
-
-    # Handle both network.config and direct network format
     if 'network' in network:
         network = network['network']
 
-    ethernets = network.get('ethernets', {})
-    bonds = network.get('bonds', {})
-    vlans = network.get('vlans', {})
-    bridges = network.get('bridges', {})
+    ethernets = network.get('ethernets', {}) or {}
+    bonds = network.get('bonds', {}) or {}
+    vlans = network.get('vlans', {}) or {}
+    bridges = network.get('bridges', {}) or {}
 
-    # Find the interface with IP configuration
-    # Priority: bridges > vlans > bonds > ethernets
-    configured = False
-    bridge_port = None
-    ip_address = None
-    gateway = None
-    dns_servers = None
-    bond_config = None
-    vlan_config = None
-    static_routes = []
-
-    # Check for existing bridges first (if MAAS created one)
-    for bridge_name, bridge_cfg in bridges.items():
-        if 'addresses' in bridge_cfg and bridge_cfg['addresses']:
-            # MAAS created a bridge, use it directly as vmbr0
-            bridge_port = bridge_cfg.get('interfaces', [None])[0]
-            ip_address = bridge_cfg['addresses'][0]
-            gateway = bridge_cfg.get('gateway4') or bridge_cfg.get('gateway')
-            nameservers = bridge_cfg.get('nameservers', {})
-            dns_servers = nameservers.get('addresses', ['8.8.8.8', '8.8.4.4'])
-            static_routes = bridge_cfg.get('routes', [])
-            print(f"DEBUG: Found MAAS bridge {bridge_name} with IP configuration")
-            print(f"  - Bridge port: {bridge_port}")
-            break
-
-    # Check for VLANs
-    if not bridge_port:
-        for vlan_name, vlan_cfg in vlans.items():
-            if 'addresses' in vlan_cfg and vlan_cfg['addresses']:
-                bridge_port = vlan_name
-                ip_address = vlan_cfg['addresses'][0]
-                gateway = vlan_cfg.get('gateway4') or vlan_cfg.get('gateway')
-                nameservers = vlan_cfg.get('nameservers', {})
-                dns_servers = nameservers.get('addresses', ['8.8.8.8', '8.8.4.4'])
-                static_routes = vlan_cfg.get('routes', [])
-
-                # Extract VLAN configuration
-                vlan_id = vlan_cfg.get('id')
-                vlan_link = vlan_cfg.get('link')
-
-                vlan_config = {
-                    'name': vlan_name,
-                    'id': vlan_id,
-                    'link': vlan_link,
-                }
-
-                print(f"DEBUG: Found VLAN {vlan_name} with IP configuration")
-                print(f"  - VLAN ID: {vlan_id}")
-                print(f"  - Parent interface: {vlan_link}")
-                break
-
-    # Check for bonds
-    if not bridge_port:
-        for bond_name, bond_cfg in bonds.items():
-            if 'addresses' in bond_cfg and bond_cfg['addresses']:
-                bridge_port = bond_name
-                ip_address = bond_cfg['addresses'][0]
-                gateway = bond_cfg.get('gateway4') or bond_cfg.get('gateway')
-                nameservers = bond_cfg.get('nameservers', {})
-                dns_servers = nameservers.get('addresses', ['8.8.8.8', '8.8.4.4'])
-                static_routes = bond_cfg.get('routes', [])
-
-                # Extract bond configuration
-                bond_params = bond_cfg.get('parameters', {})
-                bond_interfaces = bond_cfg.get('interfaces', [])
-
-                bond_config = {
-                    'name': bond_name,
-                    'interfaces': bond_interfaces,
-                    'mode': bond_params.get('mode', '802.3ad'),
-                    'miimon': bond_params.get('mii-monitor-interval', 100),
-                    'lacp_rate': bond_params.get('lacp-rate', 'fast'),
-                    'xmit_hash_policy': bond_params.get('transmit-hash-policy', 'layer2+3'),
-                }
-
-                print(f"DEBUG: Found bond {bond_name} with IP configuration")
-                print(f"  - Bond slaves: {bond_interfaces}")
-                print(f"  - Bond mode: {bond_config['mode']}")
-                break
-
-    # Check ethernet interfaces
-    if not bridge_port:
-        for iface_name, iface_cfg in ethernets.items():
-            if 'addresses' in iface_cfg and iface_cfg['addresses']:
-                bridge_port = iface_name
-                ip_address = iface_cfg['addresses'][0]
-                gateway = iface_cfg.get('gateway4') or iface_cfg.get('gateway')
-                nameservers = iface_cfg.get('nameservers', {})
-                dns_servers = nameservers.get('addresses', ['8.8.8.8', '8.8.4.4'])
-                static_routes = iface_cfg.get('routes', [])
-                print(f"DEBUG: Found ethernet interface {iface_name} with IP configuration")
-                break
-
-    if not bridge_port:
+    # Pick the interface that becomes vmbr0's port (the "primary")
+    candidates = []  # (kind, name, cfg) in bridge > vlan > bond > ethernet order
+    for kind, group in (('bridge', bridges), ('vlan', vlans),
+                        ('bond', bonds), ('ethernet', ethernets)):
+        for name, cfg in group.items():
+            if cfg.get('addresses'):
+                candidates.append((kind, name, cfg))
+    if not candidates:
         print("WARNING: No interface with IP address found in netplan config")
         return
+    with_gw = [c for c in candidates if _gateway(c[2])]
+    primary_kind, primary_name, primary_cfg = (with_gw or candidates)[0]
+    if len(with_gw) > 1:
+        print(f"WARNING: {len(with_gw)} interfaces have a default gateway; "
+              f"using {primary_name}, the others keep their address without a gateway")
 
-    print(f"DEBUG: Configuring bridge vmbr0 on {bridge_port}")
-    print(f"  - IP Address: {ip_address}")
+    gateway = _gateway(primary_cfg)
+    dns_servers = (primary_cfg.get('nameservers', {}) or {}).get('addresses', ['8.8.8.8', '8.8.4.4'])
+    if primary_kind == 'bridge':
+        # MAAS created a bridge: vmbr0 replaces it, with the same ports
+        bridge_ports = primary_cfg.get('interfaces', []) or []
+    else:
+        bridge_ports = [primary_name]
+
+    print(f"DEBUG: Configuring bridge vmbr0 on {' '.join(bridge_ports)} ({primary_kind} {primary_name})")
+    print(f"  - Addresses: {primary_cfg.get('addresses')}")
     print(f"  - Gateway: {gateway}")
     print(f"  - DNS Servers: {dns_servers}")
-    if static_routes:
-        print(f"  - Static routes: {len(static_routes)} route(s)")
 
-    # Write /etc/network/interfaces
-    interfaces_path = os.path.join(target, "etc/network/interfaces")
-    interfaces_content = []
-    interfaces_content.append("# network interface settings; autogenerated by curtin\n")
-    interfaces_content.append("# Converted from netplan for Proxmox VE compatibility\n")
-    interfaces_content.append("\n")
-    interfaces_content.append("auto lo\n")
-    interfaces_content.append("iface lo inet loopback\n")
-    interfaces_content.append("\n")
+    def stanza(name, cfg, extra):
+        """One interface. Primary (and MAAS bridges) stay manual: vmbr0 has the IP."""
+        out = [f"auto {name}\n"]
+        has_ip = bool(cfg.get('addresses')) and name != primary_name and name not in bridges
+        out.append(f"iface {name} inet {'static' if has_ip else 'manual'}\n")
+        if has_ip:
+            for addr in cfg['addresses']:
+                out.append(f"    address {addr}\n")
+            print(f"DEBUG: {name} keeps its own address(es): {cfg['addresses']}")
+        out.extend(extra)
+        out.extend(_extra_lines(cfg, skip_default_route=True) if has_ip
+                   else _extra_lines({'mtu': cfg.get('mtu')}, skip_default_route=False))
+        out.append("\n")
+        return out
 
-    # Configure bond if present
-    if bond_config:
-        # Configure bond slave interfaces
-        for slave_iface in bond_config['interfaces']:
-            interfaces_content.append(f"auto {slave_iface}\n")
-            interfaces_content.append(f"iface {slave_iface} inet manual\n")
-            interfaces_content.append(f"    bond-master {bond_config['name']}\n")
-            interfaces_content.append("\n")
+    content = [
+        "# network interface settings; autogenerated by curtin\n",
+        "# Converted from netplan for Proxmox VE compatibility\n",
+        "\n",
+        "auto lo\n",
+        "iface lo inet loopback\n",
+        "\n",
+    ]
 
-        # Configure bond interface
-        interfaces_content.append(f"auto {bond_config['name']}\n")
-        interfaces_content.append(f"iface {bond_config['name']} inet manual\n")
-        interfaces_content.append(f"    bond-slaves {' '.join(bond_config['interfaces'])}\n")
-        interfaces_content.append(f"    bond-mode {bond_config['mode']}\n")
-        interfaces_content.append(f"    bond-miimon {bond_config['miimon']}\n")
+    for name, cfg in ethernets.items():
+        content += stanza(name, cfg, [])
 
-        if bond_config['mode'] == '802.3ad':
-            interfaces_content.append(f"    bond-lacp-rate {bond_config['lacp_rate']}\n")
-            interfaces_content.append(f"    bond-xmit-hash-policy {bond_config['xmit_hash_policy']}\n")
+    for name, cfg in bonds.items():
+        params = cfg.get('parameters', {}) or {}
+        mode = params.get('mode', '802.3ad')
+        extra = [
+            f"    bond-slaves {' '.join(cfg.get('interfaces', []) or []) or 'none'}\n",
+            f"    bond-mode {mode}\n",
+            f"    bond-miimon {params.get('mii-monitor-interval', 100)}\n",
+        ]
+        if mode == '802.3ad':
+            extra.append(f"    bond-lacp-rate {params.get('lacp-rate', 'fast')}\n")
+        if mode in ('802.3ad', 'balance-xor', 'balance-tlb', 'balance-alb'):
+            extra.append(f"    bond-xmit-hash-policy {params.get('transmit-hash-policy', 'layer2+3')}\n")
+        if params.get('up-delay'):
+            extra.append(f"    bond-updelay {params['up-delay']}\n")
+        if params.get('down-delay'):
+            extra.append(f"    bond-downdelay {params['down-delay']}\n")
+        print(f"DEBUG: Bond {name}: slaves={cfg.get('interfaces')} mode={mode}")
+        content += stanza(name, cfg, extra)
 
-        interfaces_content.append("\n")
-    elif vlan_config:
-        # Configure parent interface for VLAN
-        parent_iface = vlan_config['link']
-        interfaces_content.append(f"auto {parent_iface}\n")
-        interfaces_content.append(f"iface {parent_iface} inet manual\n")
-        interfaces_content.append("\n")
+    for name, cfg in vlans.items():
+        extra = [
+            f"    vlan-raw-device {cfg.get('link')}\n",
+            f"    vlan-id {cfg.get('id')}\n",
+        ]
+        print(f"DEBUG: VLAN {name}: id={cfg.get('id')} link={cfg.get('link')}")
+        content += stanza(name, cfg, extra)
 
-        # Configure VLAN interface
-        vlan_name = vlan_config['name']
-        vlan_id = vlan_config['id']
-        interfaces_content.append(f"auto {vlan_name}\n")
-        interfaces_content.append(f"iface {vlan_name} inet manual\n")
-        interfaces_content.append(f"    vlan-raw-device {parent_iface}\n")
-        interfaces_content.append(f"    vlan-id {vlan_id}\n")
-        interfaces_content.append("\n")
-    else:
-        # Simple ethernet interface
-        interfaces_content.append(f"auto {bridge_port}\n")
-        interfaces_content.append(f"iface {bridge_port} inet manual\n")
-        interfaces_content.append("\n")
-
-    # Configure vmbr0 bridge
-    interfaces_content.append("auto vmbr0\n")
-    interfaces_content.append("iface vmbr0 inet static\n")
-    interfaces_content.append(f"    address {ip_address}\n")
+    # vmbr0 (replaces any MAAS bridge, so those are not rendered separately)
+    content.append("auto vmbr0\n")
+    content.append("iface vmbr0 inet static\n")
+    for addr in primary_cfg['addresses']:
+        content.append(f"    address {addr}\n")
     if gateway:
-        interfaces_content.append(f"    gateway {gateway}\n")
-    interfaces_content.append(f"    bridge-ports {bridge_port}\n")
-    interfaces_content.append("    bridge-stp off\n")
-    interfaces_content.append("    bridge-fd 0\n")
+        content.append(f"    gateway {gateway}\n")
+    content.append(f"    bridge-ports {' '.join(bridge_ports)}\n")
+    content.append("    bridge-stp off\n")
+    content.append("    bridge-fd 0\n")
+    content.extend(_extra_lines(primary_cfg, skip_default_route=True))
+    content.append("\n")
+    content.append("source /etc/network/interfaces.d/*\n")
 
-    # Add static routes if configured
-    if static_routes:
-        for route in static_routes:
-            to = route.get('to')
-            via = route.get('via')
-            metric = route.get('metric')
-
-            if to and via:
-                route_cmd = f"    up ip route add {to} via {via}"
-                if metric:
-                    route_cmd += f" metric {metric}"
-                interfaces_content.append(route_cmd + "\n")
-                print(f"DEBUG: Added static route: {to} via {via}")
-
-    interfaces_content.append("\n")
-    interfaces_content.append("source /etc/network/interfaces.d/*\n")
-
+    interfaces_path = os.path.join(target, "etc/network/interfaces")
     with open(interfaces_path, 'w') as f:
-        f.writelines(interfaces_content)
+        f.writelines(content)
 
     print(f"DEBUG: Created {interfaces_path} with contents:")
     print("-" * 80)
-    print(''.join(interfaces_content))
+    print(''.join(content))
     print("-" * 80)
 
     # Write DNS servers directly to /etc/resolv.conf
