@@ -101,7 +101,7 @@ sg kvm -c "make proxmox"
 - Comprehensive network support: bonds, VLANs, static routes, bridges
 - EFI fallback boot path for broad firmware compatibility
 - Proxmox no-subscription apt repositories preserved during deployment; the enterprise repo ships disabled (`Enabled: no`) so `apt-get update` works without a subscription
-- Key-only SSH (`PasswordAuthentication no`, root key login only), root password locked
+- Key-only SSH (`PasswordAuthentication no`, root key login only); root and `debian` passwords locked, so the web UI needs a post-install step (see [Required: enable web UI access](#required-enable-web-ui-access))
 - No build-time secrets: the Proxmox cluster database from the build VM is removed, so each host generates its own CA, API ticket key, node certificate and root SSH key on first boot; root's `authorized_keys` holds only the MAAS-supplied key and the host's own root key
 - All Proxmox services start automatically
 
@@ -149,7 +149,7 @@ Replace `admin` with your MAAS profile name.
 - ✅ **Bond Link Monitoring**: If using bonds, set `mii-monitor-interval` to `100` (not `0`)
 - ✅ **No Bridges**: Do NOT create bridges in MAAS (vmbr0 is created automatically)
 - ✅ **BIOS Settings**: UEFI enabled, Secure Boot supported
-- ✅ **MAAS Settings**: SSH key configured in MAAS (the deployed login user is `debian`, with passwordless sudo)
+- ✅ **MAAS Settings (REQUIRED)**: your SSH public key added to your MAAS user (the deployed login user is `debian`, with passwordless sudo). **This is the only way into a freshly deployed host**: the image has no password logins at all (see [Access model](#access-model-no-passwords-by-design)). Deploy without a key and you will have to redeploy.
 
 > **⚠️ Keeping data disks (e.g. reinstalling a Ceph node):** MAAS puts **every disk it knows about** into the curtin storage config with `wipe: superblock`, even disks the UI shows as "Unused". Deploying would wipe them (Ceph OSDs included). Before deploying, delete those disks from the machine's Storage tab in MAAS (this only removes MAAS's record, not the data), then check right after starting the deploy that only the OS disk is listed: `maas <profile> machine get-curtin-config <system_id>` (it only works while the machine is Deploying). Re-commissioning adds the disks back.
 
@@ -263,21 +263,42 @@ All layouts use directory storage at `/var/lib/vz` for VMs/containers after depl
 
 ### Post-Deployment
 
+#### Access model: no passwords by design
+
+For security, a deployed host has **no usable password anywhere**:
+
+| Account | Password | How you get in |
+|---------|----------|----------------|
+| `debian` (cloud-init default user) | locked | SSH with the key(s) from your MAAS user; passwordless `sudo` |
+| `root` | locked (`*`) | not via SSH at first (cloud-init `disable_root`); use `sudo -i` from `debian` |
+| SSH | `PasswordAuthentication no`, `PermitRootLogin prohibit-password` | keys only (`/etc/ssh/sshd_config.d/00-maas-proxmox.conf`) |
+
+Consequences:
+- **No SSH key in MAAS = no access.** There is no console or SSH password to fall back on; redeploy with a key (or boot a rescue shell from the BMC console).
+- **The Proxmox web UI (port 8006) cannot be used until you complete the step below**, because `root@pam` authenticates against the locked root password.
+- After the host joins a Proxmox cluster, root's `authorized_keys` becomes the cluster-wide `/etc/pve/priv/authorized_keys`, so root SSH works with whatever keys that file holds.
+
+#### Required: enable web UI access
+
+Do **one** of these after every deployment:
+
 ```bash
-# SSH to deployed machine
 ssh debian@<machine-ip>
 
-# Set root password for Proxmox UI access (prompts; keeps it out of shell history)
-sudo passwd root
+# Option 1: give root a password (web UI only; SSH stays key-only)
+sudo passwd root        # prompts; keeps it out of shell history
+# then log in at https://<machine-ip>:8006 as root, realm "Linux PAM"
 
-# Access Proxmox web UI
-# https://<machine-ip>:8006
-# Login: root@pam
+# Option 2 (recommended): keep root locked, create a dedicated admin in the Proxmox realm
+sudo pveum user add admin@pve
+sudo pveum passwd admin@pve
+sudo pveum acl modify / --users admin@pve --roles Administrator
+# then log in at https://<machine-ip>:8006 as admin, realm "Proxmox VE authentication server"
 ```
 
-The root password is only for the web UI (PAM realm). SSH stays key-only:
-`/etc/ssh/sshd_config.d/00-maas-proxmox.conf` sets `PasswordAuthentication no` and
-`PermitRootLogin prohibit-password`. Remove that file only if you really want password SSH.
+Setting a root password does **not** enable password SSH. Remove
+`/etc/ssh/sshd_config.d/00-maas-proxmox.conf` only if you really want password SSH (not recommended).
+In a cluster, `pve`-realm users exist cluster-wide, so Option 2 is done once; a root password must be set on each node.
 
 **Optional post-deployment tasks:**
 - Enterprise repo: ships disabled in `/etc/apt/sources.list.d/pve-enterprise.sources` (`Enabled: no`); set it to `yes` if you add a subscription. (The "No valid subscription" login popup is a separate UI notice.)
